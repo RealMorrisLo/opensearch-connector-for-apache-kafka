@@ -17,14 +17,6 @@
 
 package io.aiven.kafka.connect.opensearch;
 
-import java.io.IOException;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
-
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.config.ConfigException;
@@ -32,168 +24,166 @@ import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.errors.DataException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTask;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.util.*;
+import java.util.concurrent.TimeUnit;
+
 public class OpensearchSinkTask extends SinkTask {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(OpensearchSinkTask.class);
+  private static final Logger LOGGER = LoggerFactory.getLogger(OpensearchSinkTask.class);
+  private final Set<String> indexCache = new HashSet<>();
+  private final Set<String> indexMappingsCache = new HashSet<>();
+  private OpensearchClient client;
+  private OpensearchSinkConnectorConfig config;
+  private RecordConverter recordConverter;
 
-    private OpensearchClient client;
+  @Override
+  public String version() {
+    return Version.getVersion();
+  }
 
-    private OpensearchSinkConnectorConfig config;
+  @Override
+  public void start(final Map<String, String> props) {
+    try {
+      LOGGER.info("Starting OpensearchSinkTask.");
 
-    private final Set<String> indexCache = new HashSet<>();
+      this.config = new OpensearchSinkConnectorConfig(props);
 
-    private final Set<String> indexMappingsCache = new HashSet<>();
+      // Calculate the maximum possible backoff time ...
+      final long maxRetryBackoffMs =
+          RetryUtil.computeRetryWaitTimeInMillis(config.maxRetry(), config.retryBackoffMs());
+      if (maxRetryBackoffMs > RetryUtil.MAX_RETRY_TIME_MS) {
+        LOGGER.warn(
+            "This connector uses exponential backoff with jitter for retries, "
+                + "and using '{}={}' and '{}={}' results in an impractical but possible maximum "
+                + "backoff time greater than {} hours.",
+            OpensearchSinkConnectorConfig.MAX_RETRIES_CONFIG,
+            config.maxRetry(),
+            OpensearchSinkConnectorConfig.RETRY_BACKOFF_MS_CONFIG,
+            config.retryBackoffMs(),
+            TimeUnit.MILLISECONDS.toHours(maxRetryBackoffMs));
+      }
 
-    private RecordConverter recordConverter;
-
-    @Override
-    public String version() {
-        return Version.getVersion();
+      this.client = new OpensearchClient(config);
+      this.recordConverter = new RecordConverter(config);
+    } catch (final ConfigException e) {
+      throw new ConnectException(
+          "Couldn't start OpensearchSinkTask due to configuration error:", e);
     }
+  }
 
-    @Override
-    public void start(final Map<String, String> props) {
-        try {
-            LOGGER.info("Starting OpensearchSinkTask.");
-
-            this.config = new OpensearchSinkConnectorConfig(props);
-
-            // Calculate the maximum possible backoff time ...
-            final long maxRetryBackoffMs =
-                    RetryUtil.computeRetryWaitTimeInMillis(config.maxRetry(), config.retryBackoffMs());
-            if (maxRetryBackoffMs > RetryUtil.MAX_RETRY_TIME_MS) {
-                LOGGER.warn("This connector uses exponential backoff with jitter for retries, "
-                                + "and using '{}={}' and '{}={}' results in an impractical but possible maximum "
-                                + "backoff time greater than {} hours.",
-                        OpensearchSinkConnectorConfig.MAX_RETRIES_CONFIG, config.maxRetry(),
-                        OpensearchSinkConnectorConfig.RETRY_BACKOFF_MS_CONFIG, config.retryBackoffMs(),
-                        TimeUnit.MILLISECONDS.toHours(maxRetryBackoffMs));
-            }
-
-            this.client = new OpensearchClient(config);
-            this.recordConverter = new RecordConverter(config);
-        } catch (final ConfigException e) {
-            throw new ConnectException(
-                    "Couldn't start OpensearchSinkTask due to configuration error:",
-                    e
-            );
-        }
+  @Override
+  public void put(final Collection<SinkRecord> records) throws ConnectException {
+    LOGGER.trace("Putting {} to Opensearch", records);
+    for (final var record : records) {
+      if (ignoreRecord(record)) {
+        LOGGER.debug(
+            "Ignoring sink record with key {} and null value for topic/partition/offset {}/{}/{}",
+            record.key(),
+            record.topic(),
+            record.kafkaPartition(),
+            record.kafkaOffset());
+        continue;
+      }
+      tryWriteRecord(record);
     }
+  }
 
-    @Override
-    public void put(final Collection<SinkRecord> records) throws ConnectException {
-        LOGGER.trace("Putting {} to Opensearch", records);
-        for (final var record : records) {
-            if (ignoreRecord(record)) {
-                LOGGER.debug(
-                        "Ignoring sink record with key {} and null value for topic/partition/offset {}/{}/{}",
-                        record.key(),
-                        record.topic(),
-                        record.kafkaPartition(),
-                        record.kafkaOffset());
-                continue;
-            }
-            tryWriteRecord(record);
-        }
+  public boolean ignoreRecord(final SinkRecord record) {
+    return record.value() == null
+        && config.behaviorOnNullValues() == RecordConverter.BehaviorOnNullValues.IGNORE;
+  }
+
+  private void tryWriteRecord(final SinkRecord record) {
+    final var index = convertTopicToIndexName(record.topic());
+    ensureIndexExists(index);
+    checkMappingFor(index, record);
+    try {
+      final var indexRecord = recordConverter.convert(record, index);
+      if (Objects.nonNull(indexRecord)) {
+        client.index(indexRecord);
+      }
+    } catch (final DataException e) {
+      if (config.dropInvalidMessage()) {
+        LOGGER.error(
+            "Can't convert record from topic {} with partition {} and offset {}. Reason: ",
+            record.topic(),
+            record.kafkaPartition(),
+            record.kafkaOffset(),
+            e);
+      } else {
+        throw e;
+      }
     }
+  }
 
-    public boolean ignoreRecord(final SinkRecord record) {
-        return record.value() == null && config.behaviorOnNullValues() == RecordConverter.BehaviorOnNullValues.IGNORE;
+  /**
+   * Converts topic name to index name according OS rules:
+   * https://www.elastic.co/guide/en/elasticsearch/reference/current/indices-create-index.html#indices-create-api-path-params
+   */
+  protected String convertTopicToIndexName(final String topic) {
+    var indexName = topic.toLowerCase();
+    if (indexName.length() > 255) {
+      indexName = indexName.substring(0, 255);
+      LOGGER.warn(
+          "Topic {} length is more than 255 bytes. The final index name is {}", topic, indexName);
     }
-
-    private void tryWriteRecord(final SinkRecord record) {
-        final var index = convertTopicToIndexName(record.topic());
-        ensureIndexExists(index);
-        checkMappingFor(index, record);
-        try {
-            final var indexRecord = recordConverter.convert(record, index);
-            if (Objects.nonNull(indexRecord)) {
-                client.index(indexRecord);
-            }
-        } catch (final DataException e) {
-            if (config.dropInvalidMessage()) {
-                LOGGER.error(
-                        "Can't convert record from topic {} with partition {} and offset {}. Reason: ",
-                        record.topic(),
-                        record.kafkaPartition(),
-                        record.kafkaOffset(),
-                        e
-                );
-            } else {
-                throw e;
-            }
-        }
+    if (indexName.contains(":")) {
+      indexName = indexName.replaceAll(":", "_");
+      LOGGER.warn("Topic {} contains :. The final index name is {}", topic, indexName);
     }
-
-    /**
-     * Converts topic name to index name according OS rules:
-     * https://www.elastic.co/guide/en/elasticsearch/reference/current/indices-create-index.html#indices-create-api-path-params
-     */
-    protected String convertTopicToIndexName(final String topic) {
-        var indexName = topic.toLowerCase();
-        if (indexName.length() > 255) {
-            indexName = indexName.substring(0, 255);
-            LOGGER.warn("Topic {} length is more than 255 bytes. The final index name is {}", topic, indexName);
-        }
-        if (indexName.contains(":")) {
-            indexName = indexName.replaceAll(":", "_");
-            LOGGER.warn("Topic {} contains :. The final index name is {}", topic, indexName);
-        }
-        if (indexName.startsWith("-") || indexName.startsWith("_") || indexName.startsWith("+")) {
-            indexName = indexName.substring(1);
-            LOGGER.warn("Topic {} starts with -, _ or +. The final index name is {}", topic, indexName);
-        }
-        if (indexName.equals(".") || indexName.equals("..")) {
-            indexName = indexName.replace(".", "dot");
-            LOGGER.warn("Topic {} name is . or .. . The final index name is {}", topic, indexName);
-        }
-        return indexName;
+    if (indexName.startsWith("-") || indexName.startsWith("_") || indexName.startsWith("+")) {
+      indexName = indexName.substring(1);
+      LOGGER.warn("Topic {} starts with -, _ or +. The final index name is {}", topic, indexName);
     }
-
-
-    private void ensureIndexExists(final String index) {
-        if (!indexCache.contains(index)) {
-            LOGGER.info("Create index {}", index);
-            client.createIndex(index);
-            indexCache.add(index);
-        }
+    if (indexName.equals(".") || indexName.equals("..")) {
+      indexName = indexName.replace(".", "dot");
+      LOGGER.warn("Topic {} name is . or .. . The final index name is {}", topic, indexName);
     }
+    return indexName;
+  }
 
-    private void checkMappingFor(final String index, final SinkRecord record) {
-        if (!config.ignoreSchemaFor(record.topic()) && !indexMappingsCache.contains(index)) {
-            if (!client.hasMapping(index)) {
-                LOGGER.info("Create mapping for index {} and schema {}", index, record.valueSchema());
-                client.createMapping(index, record.valueSchema());
-                indexMappingsCache.add(index);
-            }
-        }
+  private void ensureIndexExists(final String index) {
+    if (!indexCache.contains(index)) {
+      LOGGER.info("Create index {}", index);
+      client.createIndex(index);
+      indexCache.add(index);
     }
+  }
 
-    @Override
-    public void flush(final Map<TopicPartition, OffsetAndMetadata> offsets) {
-        LOGGER.trace("Flushing data to Opensearch with the following offsets: {}", offsets);
-        client.flush();
+  private void checkMappingFor(final String index, final SinkRecord record) {
+    if (!config.ignoreSchemaFor(record.topic()) && !indexMappingsCache.contains(index)) {
+      if (!client.hasMapping(index)) {
+        LOGGER.info("Create mapping for index {} and schema {}", index, record.valueSchema());
+        client.createMapping(index, record.valueSchema());
+        indexMappingsCache.add(index);
+      }
     }
+  }
 
-    @Override
-    public void close(final Collection<TopicPartition> partitions) {
-        LOGGER.debug("Closing the task for topic partitions: {}", partitions);
+  @Override
+  public void flush(final Map<TopicPartition, OffsetAndMetadata> offsets) {
+    LOGGER.trace("Flushing data to Opensearch with the following offsets: {}", offsets);
+    client.flush();
+  }
+
+  @Override
+  public void close(final Collection<TopicPartition> partitions) {
+    LOGGER.debug("Closing the task for topic partitions: {}", partitions);
+  }
+
+  @Override
+  public void stop() throws ConnectException {
+    LOGGER.info("Stopping OpensearchSinkTask.");
+    if (Objects.nonNull(client)) {
+      try {
+        client.close();
+      } catch (final IOException e) {
+        throw new ConnectException(e);
+      }
     }
-
-    @Override
-    public void stop() throws ConnectException {
-        LOGGER.info("Stopping OpensearchSinkTask.");
-        if (Objects.nonNull(client)) {
-            try {
-                client.close();
-            } catch (final IOException e) {
-                throw new ConnectException(e);
-            }
-        }
-    }
-
+  }
 }

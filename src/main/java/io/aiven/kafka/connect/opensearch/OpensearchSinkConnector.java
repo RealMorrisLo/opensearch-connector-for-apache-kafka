@@ -17,63 +17,59 @@
 
 package io.aiven.kafka.connect.opensearch;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.connect.connector.Task;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkConnector;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 public class OpensearchSinkConnector extends SinkConnector {
 
-    private Map<String, String> configProperties;
+  private Map<String, String> configProperties;
 
-    @Override
-    public String version() {
-        return Version.getVersion();
+  @Override
+  public String version() {
+    return Version.getVersion();
+  }
+
+  @Override
+  public void start(final Map<String, String> props) throws ConnectException {
+    try {
+      configProperties = props;
+      // validation
+      new OpensearchSinkConnectorConfig(props);
+    } catch (final ConfigException e) {
+      throw new ConnectException(
+          "Couldn't start ElasticsearchSinkConnector due to configuration error", e);
     }
+  }
 
-    @Override
-    public void start(final Map<String, String> props) throws ConnectException {
-        try {
-            configProperties = props;
-            // validation
-            new OpensearchSinkConnectorConfig(props);
-        } catch (final ConfigException e) {
-            throw new ConnectException(
-                    "Couldn't start ElasticsearchSinkConnector due to configuration error",
-                    e
-            );
-        }
+  @Override
+  public Class<? extends Task> taskClass() {
+    return OpensearchSinkTask.class;
+  }
+
+  @Override
+  public List<Map<String, String>> taskConfigs(final int maxTasks) {
+    final List<Map<String, String>> taskConfigs = new ArrayList<>();
+    final Map<String, String> taskProps = new HashMap<>();
+    taskProps.putAll(configProperties);
+    for (int i = 0; i < maxTasks; i++) {
+      taskConfigs.add(taskProps);
     }
+    return taskConfigs;
+  }
 
-    @Override
-    public Class<? extends Task> taskClass() {
-        return OpensearchSinkTask.class;
-    }
+  @Override
+  public void stop() throws ConnectException {}
 
-    @Override
-    public List<Map<String, String>> taskConfigs(final int maxTasks) {
-        final List<Map<String, String>> taskConfigs = new ArrayList<>();
-        final Map<String, String> taskProps = new HashMap<>();
-        taskProps.putAll(configProperties);
-        for (int i = 0; i < maxTasks; i++) {
-            taskConfigs.add(taskProps);
-        }
-        return taskConfigs;
-    }
-
-    @Override
-    public void stop() throws ConnectException {
-
-    }
-
-    @Override
-    public ConfigDef config() {
-        return OpensearchSinkConnectorConfig.CONFIG;
-    }
+  @Override
+  public ConfigDef config() {
+    return OpensearchSinkConnectorConfig.CONFIG;
+  }
 }
