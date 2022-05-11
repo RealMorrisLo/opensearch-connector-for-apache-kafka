@@ -36,7 +36,6 @@ public class OpensearchSinkConnectorConfig extends AbstractConfig {
   public static final String CONNECTION_URL_CONFIG = "connection.url";
   public static final String CONNECTION_USERNAME_CONFIG = "connection.username";
   public static final String CONNECTION_PASSWORD_CONFIG = "connection.password";
-  public static final String CONNECTION_REGION_CONFIG = "connection.region";
   public static final String BATCH_SIZE_CONFIG = "batch.size";
   public static final String MAX_IN_FLIGHT_REQUESTS_CONFIG = "max.in.flight.requests";
   public static final String MAX_BUFFERED_RECORDS_CONFIG = "max.buffered.records";

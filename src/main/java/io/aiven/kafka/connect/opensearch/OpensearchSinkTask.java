@@ -147,11 +147,15 @@ public class OpensearchSinkTask extends SinkTask {
   }
 
   private void ensureIndexExists(final String index) {
+
     if (!indexCache.contains(index)) {
       LOGGER.info("Create index {}", index);
       client.createIndex(index);
       indexCache.add(index);
     }
+
+    //TODO to be removed
+    LOGGER.info("Current Index: {}", Arrays.toString(indexCache.toArray()));
   }
 
   private void checkMappingFor(final String index, final SinkRecord record) {

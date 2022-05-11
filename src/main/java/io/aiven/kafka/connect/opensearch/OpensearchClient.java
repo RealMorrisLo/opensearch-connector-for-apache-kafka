@@ -52,6 +52,7 @@ import java.io.IOException;
 import java.security.KeyManagementException;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.Callable;
 
@@ -69,10 +70,7 @@ public class OpensearchClient implements AutoCloseable {
   private final BulkProcessor bulkProcessor;
 
   public OpensearchClient(final OpensearchSinkConnectorConfig config) {
-    this(
-        new AwsSigningClient()
-            .searchClient(config),
-        config);
+    this(new AwsSigningClient().searchClient(config), config);
   }
 
   protected OpensearchClient(
@@ -123,6 +121,12 @@ public class OpensearchClient implements AutoCloseable {
 
   public void createMapping(final String index, final Schema schema) {
     final var request = new PutMappingRequest(index).source(Mapping.buildMappingFor(schema));
+    LOGGER.info("Index to be created: {}", Arrays.toString(request.indices()));
+    LOGGER.info(
+        "Schema DOC: {}, schema key: {}, Schema Values: {}",
+        schema.doc(),
+        schema.keySchema().doc(),
+        schema.valueSchema().doc());
     withRetry(
         String.format("create mapping for index %s with schema %s", index, schema),
         () -> client.indices().putMapping(request, RequestOptions.DEFAULT));

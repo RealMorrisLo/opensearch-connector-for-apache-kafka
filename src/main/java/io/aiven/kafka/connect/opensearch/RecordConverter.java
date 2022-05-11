@@ -24,17 +24,22 @@ import org.apache.kafka.connect.errors.DataException;
 import org.apache.kafka.connect.json.JsonConverter;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.storage.Converter;
+import org.apache.kafka.connect.storage.StringConverter;
 import org.opensearch.action.DocWriteRequest;
 import org.opensearch.action.delete.DeleteRequest;
 import org.opensearch.action.index.IndexRequest;
 import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.index.VersionType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 public class RecordConverter {
+
+  private final Logger LOGGER = LoggerFactory.getLogger(RecordConverter.class);
 
   private static final Converter JSON_CONVERTER;
 
@@ -139,10 +144,19 @@ public class RecordConverter {
 
   private DocWriteRequest<?> addExternalVersionIfNeeded(
       final DocWriteRequest<?> request, final SinkRecord record) {
+    if (request instanceof IndexRequest) {
+      LOGGER.info(
+          "Request Content: {}, Request: {}, SinkRecord: {}",
+          ((IndexRequest) request).getContentType(),
+          request.toString(),
+          record);
+    }
+
     if (!config.ignoreKeyFor(record.topic())) {
       request.versionType(VersionType.EXTERNAL);
       request.version(record.kafkaOffset());
     }
+
     return request;
   }
 
