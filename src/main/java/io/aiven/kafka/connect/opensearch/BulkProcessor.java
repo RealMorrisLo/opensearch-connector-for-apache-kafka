@@ -24,6 +24,7 @@ import org.opensearch.action.DocWriteRequest;
 import org.opensearch.action.bulk.BulkItemResponse;
 import org.opensearch.action.bulk.BulkRequest;
 import org.opensearch.action.bulk.BulkResponse;
+import org.opensearch.action.index.IndexRequest;
 import org.opensearch.client.RequestOptions;
 import org.opensearch.client.RestHighLevelClient;
 import org.slf4j.Logger;
@@ -421,11 +422,18 @@ public class BulkProcessor {
           "bulk processing",
           () -> {
             try {
+
+              batch.forEach(x -> {
+                if (x instanceof IndexRequest) {
+                  Map<String, Object> requestMap = ((IndexRequest) x).sourceAsMap();
+                  LOGGER.info("Request Map: " + requestMap.toString());
+                }
+              });
               final var response =
                   client.bulk(new BulkRequest().add(batch), RequestOptions.DEFAULT);
               if (!response.hasFailures()) {
                 // We only logged failures, so log the success immediately after a failure ...
-                LOGGER.debug("Completed batch {} of {} records", batchId, batch.size());
+                LOGGER.info("Completed batch {} of {} records", batchId, batch.size());
                 return response;
               }
               for (final var itemResponse : response.getItems()) {
@@ -433,6 +441,7 @@ public class BulkProcessor {
                   if (responseContainsMalformedDocError(itemResponse)) {
                     handleMalformedDoc(itemResponse);
                   }
+                  LOGGER.info(itemResponse.getFailureMessage());
                   throw new RuntimeException(
                       "One of the item in the bulk response failed. Reason: "
                           + itemResponse.getFailureMessage());

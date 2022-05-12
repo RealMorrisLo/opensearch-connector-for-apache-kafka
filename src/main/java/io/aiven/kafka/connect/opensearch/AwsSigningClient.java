@@ -20,13 +20,14 @@ public class AwsSigningClient {
 
   public RestHighLevelClient searchClient(OpensearchSinkConnectorConfig config) {
     final String SERVICE_NAME = "es";
+    final String REGION_NAME = "ap-southeast-1";
     final AWS4Signer signer = new AWS4Signer();
 
     final Region region = Regions.getCurrentRegion();
 
     signer.setServiceName(SERVICE_NAME);
-    signer.setRegionName(region.getName());
-    LOGGER.info("Region Name: {}", region.getName());
+    signer.setRegionName(REGION_NAME);
+    //LOGGER.info("Region Name: {}", region.getName());
 
     final HttpRequestInterceptor interceptor =
         new AWSRequestSigningApacheInterceptor(SERVICE_NAME, signer, credentialsProvider);
