@@ -405,7 +405,9 @@ public class BulkProcessor {
     public BulkResponse call() throws Exception {
       try {
         final var rsp = execute();
-        LOGGER.debug("Successfully executed batch {} of {} records", batchId, batch.size());
+        LOGGER.info("Response: {}, Status: {}", rsp, rsp.status());
+        LOGGER.info("Response Items: {}", Arrays.stream(rsp.getItems()).toArray());
+        LOGGER.info("Successfully executed batch {} of {} records", batchId, batch.size());
         onBatchCompletion(batch.size());
         return rsp;
       } catch (final Exception e) {
