@@ -103,6 +103,9 @@ public class OpensearchSinkTask extends SinkTask {
     checkMappingFor(index, record);
     try {
       final var indexRecord = recordConverter.convert(record, index);
+
+      LOGGER.info("try write record: " + indexRecord.id());
+      LOGGER.info("try write record content: " + record.value());
       if (Objects.nonNull(indexRecord)) {
         client.index(indexRecord);
       }

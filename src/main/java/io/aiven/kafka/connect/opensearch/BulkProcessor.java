@@ -17,6 +17,7 @@
 
 package io.aiven.kafka.connect.opensearch;
 
+import com.amazonaws.RequestClientOptions;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.connect.errors.ConnectException;
@@ -144,10 +145,17 @@ public class BulkProcessor {
 
   private synchronized Future<BulkResponse> submitBatch() {
     assert !unsentRecords.isEmpty();
+    LOGGER.info("current batch size: " + batchSize);
+
     final int batchableSize = Math.min(batchSize, unsentRecords.size());
     final var batch = new ArrayList<DocWriteRequest<?>>(batchableSize);
     for (int i = 0; i < batchableSize; i++) {
-      batch.add(unsentRecords.removeFirst());
+      var currentItem = unsentRecords.removeFirst();
+      boolean removedItem = batch.removeIf(x -> x.id().equals(currentItem.id()));
+      if (!removedItem)
+        batch.add(currentItem);
+      if (unsentRecords.isEmpty())
+        break;
     }
     inFlightRecords += batchableSize;
     return executor.submit(new BulkTask(batch, maxRetries, retryBackoffMs));
@@ -258,6 +266,9 @@ public class BulkProcessor {
   public synchronized void add(final DocWriteRequest<?> request, final long timeoutMs) {
     throwIfTerminal();
 
+    for (DocWriteRequest<?> unsentRecord : unsentRecords) {
+      LOGGER.info("Message in unsent buffer: " + unsentRecord.id());
+    }
     if (bufferedRecords() >= maxBufferedRecords) {
       final long addStartTimeMs = time.milliseconds();
       for (long elapsedMs = time.milliseconds() - addStartTimeMs;
@@ -427,8 +438,10 @@ public class BulkProcessor {
                 if (x instanceof IndexRequest) {
                   Map<String, Object> requestMap = ((IndexRequest) x).sourceAsMap();
                   LOGGER.info("Request Map: " + requestMap.toString());
+
                 }
               });
+
               final var response =
                   client.bulk(new BulkRequest().add(batch), RequestOptions.DEFAULT);
               if (!response.hasFailures()) {
