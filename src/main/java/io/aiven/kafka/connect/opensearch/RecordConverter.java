@@ -134,6 +134,7 @@ public class RecordConverter {
     }
 
     final String payload = getPayload(record);
+
     return addExternalVersionIfNeeded(
         new IndexRequest(index)
             .id(id)
@@ -154,7 +155,7 @@ public class RecordConverter {
 
     if (!config.ignoreKeyFor(record.topic())) {
       request.versionType(VersionType.EXTERNAL);
-      request.version(record.kafkaOffset());
+      request.version(record.timestamp());
     }
 
     return request;

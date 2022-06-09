@@ -137,7 +137,8 @@ public class BulkProcessor {
         elapsedMs = time.milliseconds() - waitStartTimeMs) {
       // when linger time has already elapsed, we still have to ensure the other submission
       // conditions hence the wait(0) in that case
-      wait(Math.max(0, lingerMs - elapsedMs));
+      //wait(Math.max(0, lingerMs - elapsedMs));
+      wait(1000);
     }
     // at this point, either stopRequested or canSubmit
     return stopRequested ? null : submitBatch();
@@ -171,6 +172,18 @@ public class BulkProcessor {
    * </ul>
    */
   private synchronized boolean canSubmit(final long elapsedMs) {
+//    if (elapsedMs >= lingerMs) {
+//      LOGGER.info("Linger time is up: " + elapsedMs);
+//
+//    }
+//    if (elapsedMs >= lingerMs) {
+//      LOGGER.info("Batch size is reached: " + unsentRecords.size());
+//
+//    }
+//    if (flushRequested) {
+//      LOGGER.info("Flush is true");
+//
+//    }
     return !unsentRecords.isEmpty()
         && (flushRequested || elapsedMs >= lingerMs || unsentRecords.size() >= batchSize);
   }
@@ -266,9 +279,9 @@ public class BulkProcessor {
   public synchronized void add(final DocWriteRequest<?> request, final long timeoutMs) {
     throwIfTerminal();
 
-    for (DocWriteRequest<?> unsentRecord : unsentRecords) {
-      LOGGER.info("Message in unsent buffer: " + unsentRecord.id());
-    }
+//    for (DocWriteRequest<?> unsentRecord : unsentRecords) {
+//      LOGGER.info("Message in unsent buffer: " + unsentRecord.id());
+//    }
     if (bufferedRecords() >= maxBufferedRecords) {
       final long addStartTimeMs = time.milliseconds();
       for (long elapsedMs = time.milliseconds() - addStartTimeMs;
@@ -434,14 +447,15 @@ public class BulkProcessor {
           () -> {
             try {
 
-              batch.forEach(x -> {
-                if (x instanceof IndexRequest) {
-                  Map<String, Object> requestMap = ((IndexRequest) x).sourceAsMap();
-                  LOGGER.info("Request Map: " + requestMap.toString());
+//              batch.forEach(x -> {
+//                if (x instanceof IndexRequest) {
+//                  Map<String, Object> requestMap = ((IndexRequest) x).sourceAsMap();
+//                  LOGGER.info("Request Map: " + requestMap.toString());
+//
+//                }
+//              });
 
-                }
-              });
-
+              LOGGER.info("Started batch {} of {} records", batchId, batch.size());
               final var response =
                   client.bulk(new BulkRequest().add(batch), RequestOptions.DEFAULT);
               if (!response.hasFailures()) {
